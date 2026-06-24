@@ -1,0 +1,7 @@
+python-telegram-bot
+python-dotenv
+requests
+faker
+pyotp
+pytz
+urllib3
