@@ -43,7 +43,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
-# ── Global logging level: only WARNING and above will be shown ──
+# ── Silent logs: only warnings & errors ──
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("sms_otp_bot")
 
@@ -73,8 +73,10 @@ except ValueError: MAIN_CHANNEL_ID_INT = None
 try: GROUP_CHAT_ID_INT = int(GROUP_CHAT_ID) if GROUP_CHAT_ID else None
 except ValueError: GROUP_CHAT_ID_INT = None
 
-# Railway stores persistent data under /data, else use current directory
+# ── Persistent data directory (Railway: /data, local: .) ──
 DATA_DIR = os.getenv("DATA_DIR", ".")
+os.makedirs(DATA_DIR, exist_ok=True)   # creates /data if missing
+
 DB_FILE = os.path.join(DATA_DIR, "wallet.db")
 MAIN_BUTTONS_FILE = os.path.join(DATA_DIR, "main_buttons.json")
 SUB_BUTTONS_FILE = os.path.join(DATA_DIR, "sub_buttons.json")
@@ -108,7 +110,6 @@ session8.headers.update({
 })
 
 last_get_number: Dict[int, float] = {}
-membership_cache: Dict[int, Tuple[float, bool]] = {}
 user_request_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=RATE_LIMIT_MAX_REQUESTS))
 
 # ════════════════════════════════════════════════════════════════
@@ -151,8 +152,9 @@ def init_db():
     )''')
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('min_withdrawal_bdt', '20.0')")
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('per_otp_bdt', '0.30')")
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('refer_rate_bdt', '0.10')")
+    c.execute("INSERT OR IIGNORE INTO settings (key, value) VALUES ('refer_rate_bdt', '0.10')")
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('refer_levels', '2')")
+    # add missing columns gracefully
     for col, typ in [('today_otps','INTEGER DEFAULT 0'), ('today_earned','REAL DEFAULT 0.0'), ('total_earned','REAL DEFAULT 0.0'),
                      ('last_reset_date',"TEXT DEFAULT ''"), ('referred_by','INTEGER DEFAULT NULL'), ('referral_earned','REAL DEFAULT 0.0'),
                      ('total_referrals','INTEGER DEFAULT 0')]:
@@ -164,19 +166,22 @@ def init_db():
 init_db()
 
 # ════════════════════════════════════════════════════════════════
-#  HELPERS (identical to original, no logging changes)
+#  HELPERS
 # ════════════════════════════════════════════════════════════════
 def is_admin(user_id): return user_id in ADMIN_CHAT_IDS
+
 def is_banned(user_id):
     conn = sqlite3.connect(DB_FILE)
     row = conn.execute("SELECT until FROM banned_users WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
     return bool(row and row[0] > time.time())
+
 def ban_user(user_id, minutes=5):
     until = time.time() + minutes * 60
     conn = sqlite3.connect(DB_FILE)
     conn.execute("INSERT OR REPLACE INTO banned_users (user_id, until) VALUES (?, ?)", (user_id, until))
     conn.commit(); conn.close()
+
 def check_global_rate_limit(user_id):
     if is_admin(user_id): return True
     now = time.time()
@@ -214,14 +219,17 @@ def load_json(filename, default):
             content = f.read().strip()
             return json.loads(content) if content else default
     except: os.remove(filename); return default
+
 def save_json(filename, data):
     with open(filename,'w') as f: json.dump(data, f, indent=2, ensure_ascii=False)
+
 def load_main_buttons(): return load_json(MAIN_BUTTONS_FILE, ["Facebook","Instagram"])
 def save_main_buttons(buttons): save_json(MAIN_BUTTONS_FILE, buttons)
 def load_sub_buttons(): return load_json(SUB_BUTTONS_FILE, {"Facebook":["Peru"],"Instagram":["India"]})
 def save_sub_buttons(data): save_json(SUB_BUTTONS_FILE, data)
 def load_pools(): return load_json(POOLS_FILE, {})
 def save_pools(data): save_json(POOLS_FILE, data)
+
 def load_assigned():
     raw = load_json(ASSIGNED_FILE, {})
     normalized = {}
@@ -229,19 +237,24 @@ def load_assigned():
         if isinstance(val, int): normalized[num] = {"user_id": val, "main": "", "sub": None}
         elif isinstance(val, dict): normalized[num] = {"user_id": val.get("user_id",0), "main": val.get("main",""), "sub": val.get("sub")}
     return normalized
+
 def save_assigned(data): save_json(ASSIGNED_FILE, data)
+
 def load_users(): return set(load_json(USERS_FILE, []))
 def save_users(users): save_json(USERS_FILE, list(users))
+
 def ensure_user_exists(user_id):
     conn = sqlite3.connect(DB_FILE)
     conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
     conn.commit(); conn.close()
+
 def get_user_balance(user_id):
     ensure_user_exists(user_id)
     conn = sqlite3.connect(DB_FILE)
     row = conn.execute("SELECT balance_bdt FROM users WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
     return row[0] if row else 0.0
+
 def credit_user(user_id, amount_bdt):
     ensure_user_exists(user_id)
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -253,6 +266,7 @@ def credit_user(user_id, amount_bdt):
     conn.execute("UPDATE users SET balance_bdt = balance_bdt + ?, today_otps = today_otps + 1, today_earned = today_earned + ?, total_earned = total_earned + ? WHERE user_id=?",
                  (amount_bdt, amount_bdt, amount_bdt, user_id))
     conn.commit(); conn.close()
+
 def process_referral_commissions(user_id, per_otp):
     refer_rate = float(get_setting("refer_rate_bdt","0.10"))
     max_levels = int(get_setting("refer_levels","2"))
@@ -266,16 +280,19 @@ def process_referral_commissions(user_id, per_otp):
                      (refer_rate, refer_rate, referrer))
         current = referrer
     conn.commit(); conn.close()
+
 def get_user_wallet(user_id):
     conn = sqlite3.connect(DB_FILE)
     row = conn.execute("SELECT bkash, rocket, binance FROM users WHERE user_id=?", (user_id,)).fetchone()
     conn.close()
     return {'bkash': row[0], 'rocket': row[1], 'binance': row[2]} if row else {'bkash':None,'rocket':None,'binance':None}
+
 def set_wallet_detail(user_id, field, value):
     ensure_user_exists(user_id)
     conn = sqlite3.connect(DB_FILE)
     conn.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
     conn.commit(); conn.close()
+
 def create_withdrawal(user_id, amount_bdt, method, wallet_detail):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect(DB_FILE)
@@ -287,11 +304,13 @@ def create_withdrawal(user_id, amount_bdt, method, wallet_detail):
                  (user_id, amount_bdt, method, wallet_detail, now))
     conn.commit(); conn.close()
     return True, None
+
 def get_pending_requests():
     conn = sqlite3.connect(DB_FILE)
     rows = conn.execute("SELECT id, user_id, amount_bdt, method, wallet_detail, request_time FROM withdraw_requests WHERE status='pending' ORDER BY request_time").fetchall()
     conn.close()
     return [{'id':r[0], 'user_id':r[1], 'amount_bdt':r[2], 'method':r[3], 'wallet_detail':r[4], 'time':r[5]} for r in rows]
+
 def complete_withdrawal(request_id, admin_id):
     conn = sqlite3.connect(DB_FILE)
     row = conn.execute("SELECT id, user_id, amount_bdt, method, wallet_detail FROM withdraw_requests WHERE id=? AND status='pending'", (request_id,)).fetchone()
@@ -307,6 +326,7 @@ def complete_withdrawal(request_id, admin_id):
         amount_display = f"{amount:.2f} BDT"; wallet_label = f"{method.capitalize()} Number" if method!='mobile' else "Mobile Number"
     msg = f"🎉 <b>Withdrawal Approved</b>\n\n💵 <b>Amount:</b> {amount_display}\n🏦 <b>Method:</b> {method}\n📞 <b>{wallet_label}:</b> {wallet}\n✅ <b>Status:</b> Complete\n\nWe appreciate your trust!"
     return user_id, msg
+
 def get_withdrawal_history(user_id=None):
     conn = sqlite3.connect(DB_FILE)
     if user_id is None:
@@ -315,15 +335,18 @@ def get_withdrawal_history(user_id=None):
         rows = conn.execute("SELECT id, amount_bdt, method, wallet_detail, request_time, completed_time FROM withdraw_requests WHERE user_id=? AND status='completed' ORDER BY completed_time DESC", (user_id,)).fetchall()
     conn.close()
     return [{'id':r[0],'user_id':r[1] if len(r)>6 else user_id,'amount_bdt':r[2],'method':r[3],'wallet':r[4],'request_time':r[5],'completed_time':r[6]} for r in rows]
+
 def get_setting(key, default=None):
     conn = sqlite3.connect(DB_FILE)
     row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     conn.close()
     return row[0] if row else default
+
 def set_setting(key, value):
     conn = sqlite3.connect(DB_FILE)
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit(); conn.close()
+
 def get_user_stats(user_id):
     assigned = load_assigned()
     numbers_used = sum(1 for v in assigned.values() if isinstance(v, dict) and v.get("user_id") == user_id)
@@ -337,6 +360,7 @@ def get_user_stats(user_id):
     total_withdrawn = total_withdrawn_row[0] if total_withdrawn_row else 0.0
     conn.close()
     return {"numbers_used":numbers_used,"today_otps":today_otps,"today_earned":today_earned,"total_earned":total_earned,"total_withdrawn":total_withdrawn,"referral_earned":referral_earned,"total_referrals":total_referrals}
+
 def get_admin_stats():
     assigned = load_assigned()
     total_numbers = len(assigned)
@@ -404,7 +428,7 @@ async def verify_join_callback(update, context):
         await query.answer("❌ You haven't joined all required channels. Please join and try again.", show_alert=True)
 
 # ════════════════════════════════════════════════════════════════
-#  SITE LOGIN & FETCH (errors only)
+#  SITE LOGIN & FETCH
 # ════════════════════════════════════════════════════════════════
 def site_login(session, base_url, username, password, retries=3):
     login_url = f"{base_url}/login"
@@ -557,7 +581,7 @@ async def send_otp_to_user(bot, user_id, row, otp, old_balance, new_balance, cou
         logger.error(f"User send failed {user_id}: {e}")
 
 # ════════════════════════════════════════════════════════════════
-#  SITE 8 MONITOR (quiet)
+#  SITE 8 MONITOR (runs continuously, sends OTP to assigned user & group)
 # ════════════════════════════════════════════════════════════════
 async def safe_monitor_site8(application):
     while True:
@@ -620,9 +644,13 @@ async def monitor_site8(application):
             if pair in seen_pairs: continue
             seen_pairs.add(pair)
             save_seen_pair(seen_file, number, otp)
+
+            # Find assigned user
             assign_data = normalised_assigned.get(normalise_number(number), {})
             user_id = assign_data.get("user_id") if isinstance(assign_data, dict) else assign_data
             country = assign_data.get("main", "") if isinstance(assign_data, dict) else ""
+
+            # Prepare tasks to send OTP concurrently
             tasks = [send_otp_to_group(bot, row, otp, country)]
             if user_id:
                 old_bal = get_user_balance(user_id)
@@ -634,7 +662,7 @@ async def monitor_site8(application):
         await asyncio.sleep(SITE8_CHECK_INTERVAL)
 
 # ════════════════════════════════════════════════════════════════
-#  MAIN HANDLERS (unchanged, logging only errors)
+#  MAIN HANDLERS
 # ════════════════════════════════════════════════════════════════
 def check_get_number_rate_limit(user_id):
     now = time.time()
@@ -838,7 +866,7 @@ async def assign_number_and_display(query_or_update, main_name, sub_name, user_i
         await query_or_update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 # ════════════════════════════════════════════════════════════════
-#  UNIFIED ADMIN CONVERSATION (all states same as before)
+#  ADMIN PANEL (merged into one conversation)
 # ════════════════════════════════════════════════════════════════
 (
     PROFILE_SELECT,
@@ -899,7 +927,7 @@ async def number_status(update, context):
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
     return PROFILE_SELECT
 
-# ── Add/Remove Main Button handlers ──
+# ── Add/Remove Main Button ──
 async def add_remove_main(update, context):
     if not is_admin(update.effective_user.id): return ConversationHandler.END
     if not await enforce_rate_limit(update, context): return ConversationHandler.END
@@ -971,7 +999,7 @@ async def remove_main_callback(update, context):
     await query.message.reply_text("👤 Admin Panel", reply_markup=ReplyKeyboardMarkup(admin_profile_kb(), resize_keyboard=True))
     return PROFILE_SELECT
 
-# ── Upload handlers ──
+# ── Upload ──
 async def upload_from_profile(update, context):
     if not is_admin(update.effective_user.id): return ConversationHandler.END
     if not await enforce_rate_limit(update, context): return ConversationHandler.END
@@ -1048,7 +1076,7 @@ async def upload_file_receive(update, context):
                                     reply_markup=ReplyKeyboardMarkup(admin_profile_kb(), resize_keyboard=True))
     return PROFILE_SELECT
 
-# ── Broadcast handlers ──
+# ── Broadcast ──
 async def broadcast_start(update, context):
     if not is_admin(update.effective_user.id): return ConversationHandler.END
     if not await enforce_rate_limit(update, context): return ConversationHandler.END
@@ -1087,7 +1115,7 @@ async def broadcast_confirm(update, context):
     await query.message.reply_text("👤 Admin Panel", reply_markup=ReplyKeyboardMarkup(admin_profile_kb(), resize_keyboard=True))
     return PROFILE_SELECT
 
-# ── Entry point into admin panel ──
+# ── Admin entry ──
 async def profile_start(update, context):
     if not await require_membership(update, context): return ConversationHandler.END
     if not await enforce_rate_limit(update, context): return ConversationHandler.END
@@ -1155,7 +1183,7 @@ async def profile_select(update, context):
     else:
         return PROFILE_SELECT
 
-# ── Wallet / Withdraw / Edit handlers (unchanged, now quiet) ──
+# ── Wallet / Withdraw / Edit callbacks ──
 async def profile_callback_handler(update, context):
     if not await require_membership(update, context): return ConversationHandler.END
     if not await enforce_rate_limit(update, context): return ConversationHandler.END
@@ -1341,7 +1369,6 @@ def main():
 
     application.add_handler(InlineQueryHandler(inline_query))
 
-    # Unified admin conversation
     admin_conv = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex("^Admin Panel$"), profile_start),
@@ -1395,8 +1422,7 @@ def main():
 
     application.post_init = post_init
 
-    # The only startup log you’ll see on Railway:
-    print("Bot started")
+    print("Bot started")   # only startup log
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
