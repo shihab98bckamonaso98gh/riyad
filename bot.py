@@ -43,7 +43,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
-# Silent logs, only warnings & errors
+# Silent logs: only warnings & errors
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("sms_otp_bot")
 
@@ -73,9 +73,9 @@ except ValueError: MAIN_CHANNEL_ID_INT = None
 try: GROUP_CHAT_ID_INT = int(GROUP_CHAT_ID) if GROUP_CHAT_ID else None
 except ValueError: GROUP_CHAT_ID_INT = None
 
-# Persistent data directory (Railway: /data, local: .)
+# ── Persistent data directory (Railway: /data, local: .) ──
 DATA_DIR = os.getenv("DATA_DIR", ".")
-os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)   # creates /data if missing
 
 DB_FILE = os.path.join(DATA_DIR, "wallet.db")
 MAIN_BUTTONS_FILE = os.path.join(DATA_DIR, "main_buttons.json")
@@ -152,7 +152,7 @@ def init_db():
     )''')
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('min_withdrawal_bdt', '20.0')")
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('per_otp_bdt', '0.30')")
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('refer_rate_bdt', '0.10')")  # <-- TYPO FIXED
+    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('refer_rate_bdt', '0.10')")
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('refer_levels', '2')")
     for col, typ in [('today_otps','INTEGER DEFAULT 0'), ('today_earned','REAL DEFAULT 0.0'), ('total_earned','REAL DEFAULT 0.0'),
                      ('last_reset_date',"TEXT DEFAULT ''"), ('referred_by','INTEGER DEFAULT NULL'), ('referral_earned','REAL DEFAULT 0.0'),
@@ -165,7 +165,7 @@ def init_db():
 init_db()
 
 # ════════════════════════════════════════════════════════════════
-#  HELPERS (unchanged)
+#  HELPERS
 # ════════════════════════════════════════════════════════════════
 def is_admin(user_id): return user_id in ADMIN_CHAT_IDS
 def is_banned(user_id):
@@ -1397,7 +1397,7 @@ def main():
 
     application.post_init = post_init
 
-    print("Bot started")   # only startup log
+    print("Bot started")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
