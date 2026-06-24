@@ -1044,7 +1044,8 @@ async def upload_file_receive(update, context):
     save_pools(pools)
     desc = f"{main_name} / {sub_name}" if sub_name else main_name
     try:
-        await update.message.bot.send_message(GROUP_CHAT_ID_INT, f"{desc}‑এ {len(numbers)} টি নাম্বার আপলোড হয়েছে (আগের নাম্বার মুছে ফেলা হয়েছে)।")
+        # FIXED: use context.bot instead of update.message.bot
+        await context.bot.send_message(GROUP_CHAT_ID_INT, f"{desc}‑এ {len(numbers)} টি নাম্বার আপলোড হয়েছে (আগের নাম্বার মুছে ফেলা হয়েছে)।")
     except Exception as e:
         logger.error(f"Upload notification failed: {e}")
     await update.message.reply_text(f"Replaced numbers in {desc} with {len(numbers)} new numbers.",
